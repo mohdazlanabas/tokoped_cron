@@ -2,49 +2,56 @@ name: Daily Browser Visit
 
 on:
   schedule:
-    - cron: "0 1 * * *"   # 01:00 UTC = 09:00 Asia/Makassar
+    - cron: "0 1 * * *"    # Runs daily at 01:00 UTC = 09:00 Asia/Makassar/Kuala Lumpur
   workflow_dispatch:
 
 jobs:
   visit:
     runs-on: ubuntu-latest
+
     steps:
+      # 1. Checkout repo
       - uses: actions/checkout@v4
 
+      # 2. Setup Node.js environment
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install deps
+      # 3. Install dependencies
+      - name: Install dependencies
         run: npm ci || npm i
 
-      - name: Run Puppeteer check (generates artifacts/summary.txt)
+      # 4. Run Puppeteer script to visit URLs
+      - name: Run Puppeteer check (creates artifacts/summary.txt)
         run: npm run ping
 
-      - name: Read summary into env
+      # 5. Read summary file and load into GitHub Actions environment
+      - name: Read summary into environment
         id: summary
         run: |
           echo 'SUMMARY<<EOF' >> $GITHUB_ENV
           cat artifacts/summary.txt >> $GITHUB_ENV
           echo 'EOF' >> $GITHUB_ENV
 
+      # 6. Send daily email summary via Gmail SMTP
       - name: Email summary
         if: always()
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
+          server_address: ${{ secrets.SMTP_SERVER }}   # e.g., smtp.gmail.com
+          server_port: 587                             # Gmail STARTTLS
+          secure: false                                # STARTTLS mode
+          username: ${{ secrets.SMTP_USER }}           # your Gmail address
+          password: ${{ secrets.SMTP_PASS }}           # your App Password (no spaces)
           subject: "Daily visit summary"
           to: "azlan@net1io.com"
           from: "Visit Agent <${{ secrets.SMTP_USER }}>"
-          secure: true
-          content_type: text/plain
           body: ${{ env.SUMMARY }}
 
-      - name: Upload artifacts (logs only)
+      # 7. Upload logs and reports as artifact (optional)
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
