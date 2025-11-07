@@ -2,7 +2,7 @@ name: Daily Browser Visit
 
 on:
   schedule:
-    - cron: "0 1 * * *"  # 01:00 UTC = 09:00 Asia/Makassar
+    - cron: "0 1 * * *"   # 01:00 UTC = 09:00 Asia/Makassar
   workflow_dispatch:
 
 jobs:
@@ -19,10 +19,32 @@ jobs:
       - name: Install deps
         run: npm ci || npm i
 
-      - name: Run Puppeteer check
+      - name: Run Puppeteer check (generates artifacts/summary.txt)
         run: npm run ping
 
-      - name: Upload artifacts (report + failure screenshots)
+      - name: Read summary into env
+        id: summary
+        run: |
+          echo 'SUMMARY<<EOF' >> $GITHUB_ENV
+          cat artifacts/summary.txt >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
+
+      - name: Email summary
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "Daily visit summary"
+          to: "azlan@net1io.com"
+          from: "Visit Agent <${{ secrets.SMTP_USER }}>"
+          secure: true
+          content_type: text/plain
+          body: ${{ env.SUMMARY }}
+
+      - name: Upload artifacts (logs only)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -30,15 +52,5 @@ jobs:
           path: |
             artifacts/visit_log.csv
             artifacts/visit_log.json
-            artifacts/failures/
+            artifacts/summary.txt
           if-no-files-found: warn
-
-      # Optional: Slack notification on failure
-      - name: Slack notify on failure
-        if: failure()
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_COLOR: danger
-          SLACK_TITLE: "Daily Browser Visit FAILED"
-          SLACK_MESSAGE: "Check logs and artifacts: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
