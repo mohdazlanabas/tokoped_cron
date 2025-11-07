@@ -2,9 +2,7 @@
   "name": "visit-agent",
   "private": true,
   "type": "module",
-  "scripts": {
-    "ping": "node ping.js"
-  },
+  "scripts": { "ping": "node ping.js" },
   "dependencies": {
     "puppeteer": "^23.7.0",
     "puppeteer-extra": "^3.3.6",

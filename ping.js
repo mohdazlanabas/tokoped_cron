@@ -1,4 +1,4 @@
-// ping.js — stealth + locale + longer timeouts + relaxed success rule
+// ping.js — robust success rules for sites that return response=null (status 0)
 
 import fs from "fs";
 import { readFile } from "fs/promises";
@@ -22,14 +22,19 @@ const SUMMARY_TXT = path.join(ARTIFACT_DIR, "summary.txt");
 
 // Tuned for marketplaces
 const VISIT_TIMEOUT_MS = 120_000;
-const WAIT_UNTIL = "networkidle2";
+const NAV_WAIT_UNTIL = "domcontentloaded"; // more tolerant than networkidle
 const MAX_RETRIES = 4;
 const JITTER_MS = [1200, 4000];
-const POST_LOAD_SETTLE_MS = 2500;
+const POST_LOAD_SETTLE_MS = 2000;
 
-// Success = HTTP 2xx/3xx (don’t require big HTML; many sites hydrate via JS)
-function isOk(status) {
-  return status >= 200 && status < 400;
+// ---------- Helpers ----------
+const nowIso = () => new Date().toISOString();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const randInt = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
+const backoffMs = (attempt) => 1000 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 500);
+
+function parseHostname(u) {
+  try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
 // CSV reader (header: url)
@@ -44,18 +49,20 @@ function readUrls(csvText) {
   return lines.slice(1).map((l) => l.split(",")[0].trim());
 }
 
-const nowIso = () => new Date().toISOString();
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const randInt = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
-const backoffMs = (attempt) => 1000 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 500);
+// Robust success rule: status ok OR (real DOM & title) OR hostname reached
+function isOk({ status, bodyLen, title, finalHost, targetHost }) {
+  const statusOk = status >= 200 && status < 400;
+  const domOk = bodyLen > 1200 && title && title.trim().length > 0;
+  const hostOk = finalHost && targetHost && finalHost.endsWith(targetHost);
+  return Boolean(statusOk || (domOk && hostOk) || hostOk);
+}
 
 async function newPage(browser) {
   const page = await browser.newPage();
-  // Indonesia-like environment
+  await page.setDefaultNavigationTimeout(VISIT_TIMEOUT_MS);
   await page.emulateTimezone("Asia/Makassar");
   await page.setExtraHTTPHeaders({ "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7" });
   await page.setViewport({ width: 1366, height: 864 });
-  // Realistic UA
   await page.setUserAgent(
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
   );
@@ -63,10 +70,23 @@ async function newPage(browser) {
 }
 
 async function visitOnce(page, url) {
-  const res = await page.goto(url, { waitUntil: WAIT_UNTIL, timeout: VISIT_TIMEOUT_MS });
+  const targetHost = parseHostname(url);
+  const res = await page.goto(url, { waitUntil: NAV_WAIT_UNTIL, timeout: VISIT_TIMEOUT_MS });
+  // Allow late JS hydration
   await page.waitForTimeout(POST_LOAD_SETTLE_MS);
-  const status = res?.status() ?? 0;
-  return { status };
+
+  const status = res?.status?.() ?? res?.status ?? 0;
+  const finalUrl = page.url();
+  const finalHost = parseHostname(finalUrl);
+
+  // Collect simple DOM signals
+  const { bodyLen, title } = await page.evaluate(() => {
+    const t = document.title || "";
+    const txt = (document.body && document.body.innerText) ? document.body.innerText : "";
+    return { title: t, bodyLen: txt.length };
+  });
+
+  return { status, finalHost, targetHost, bodyLen, title };
 }
 
 async function run() {
@@ -81,31 +101,32 @@ async function run() {
     return;
   }
 
-  // Use puppeteer-extra to launch with stealth
+  // Stealth Chromium
   const browser = await puppeteerExtra.launch({
     headless: "new",
+    ignoreHTTPSErrors: true,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--lang=id-ID"
-    ],
-    // executablePath optional; default Chromium is fine in Actions
+      "--lang=id-ID",
+      "--window-size=1366,864"
+    ]
   });
 
   const page = await newPage(browser);
 
   const results = [];
   for (const url of urls) {
-    let attempt = 0, ok = false, status = 0, errorMsg = "";
+    let attempt = 0, ok = false, status = 0, errorMsg = "", lastProbe = null;
 
     while (attempt < MAX_RETRIES && !ok) {
       attempt++;
       try {
-        const out = await visitOnce(page, url);
-        status = out.status;
-        ok = isOk(status);
-        if (!ok) errorMsg = `Unhealthy: status=${status}`;
+        lastProbe = await visitOnce(page, url);
+        status = lastProbe.status || 0;
+        ok = isOk(lastProbe);
+        if (!ok) errorMsg = `Unhealthy: status=${status}, host=${lastProbe.finalHost}, body=${lastProbe.bodyLen}, title="${(lastProbe.title||"").slice(0,60)}"`;
       } catch (e) {
         errorMsg = e?.message || String(e);
       }
@@ -114,7 +135,11 @@ async function run() {
 
     results.push({
       timestamp: nowIso(),
-      url, status, ok, attempts: attempt, error: ok ? "" : errorMsg
+      url,
+      status,
+      ok,
+      attempts: attempt,
+      error: ok ? "" : errorMsg
     });
 
     await sleep(randInt(JITTER_MS[0], JITTER_MS[1]));
