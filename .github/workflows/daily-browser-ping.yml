@@ -1,0 +1,44 @@
+name: Daily Browser Visit
+
+on:
+  schedule:
+    - cron: "0 1 * * *"  # 01:00 UTC = 09:00 Asia/Makassar
+  workflow_dispatch:
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: npm ci || npm i
+
+      - name: Run Puppeteer check
+        run: npm run ping
+
+      - name: Upload artifacts (report + failure screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visit-artifacts
+          path: |
+            artifacts/visit_log.csv
+            artifacts/visit_log.json
+            artifacts/failures/
+          if-no-files-found: warn
+
+      # Optional: Slack notification on failure
+      - name: Slack notify on failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: danger
+          SLACK_TITLE: "Daily Browser Visit FAILED"
+          SLACK_MESSAGE: "Check logs and artifacts: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
