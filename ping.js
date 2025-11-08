@@ -73,7 +73,7 @@ async function visitOnce(page, url) {
   const targetHost = parseHostname(url);
   const res = await page.goto(url, { waitUntil: NAV_WAIT_UNTIL, timeout: VISIT_TIMEOUT_MS });
   // Allow late JS hydration
-  await page.waitForTimeout(POST_LOAD_SETTLE_MS);
+  await sleep(POST_LOAD_SETTLE_MS);
 
   const status = res?.status?.() ?? res?.status ?? 0;
   const finalUrl = page.url();
