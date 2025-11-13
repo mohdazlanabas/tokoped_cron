@@ -20,6 +20,11 @@ const REPORT_CSV = path.join(ARTIFACT_DIR, "visit_log.csv");
 const REPORT_JSON = path.join(ARTIFACT_DIR, "visit_log.json");
 const SUMMARY_TXT = path.join(ARTIFACT_DIR, "summary.txt");
 
+// Login credentials (optional - from environment variables)
+const TOKOPEDIA_EMAIL = process.env.TOKOPEDIA_EMAIL || "";
+const TOKOPEDIA_PASSWORD = process.env.TOKOPEDIA_PASSWORD || "";
+const REQUIRE_LOGIN = TOKOPEDIA_EMAIL && TOKOPEDIA_PASSWORD;
+
 // Tuned for marketplaces
 const VISIT_TIMEOUT_MS = 120_000;
 const NAV_WAIT_UNTIL = "domcontentloaded"; // more tolerant than networkidle
@@ -89,6 +94,74 @@ async function visitOnce(page, url) {
   return { status, finalHost, targetHost, bodyLen, title };
 }
 
+async function loginToTokopedia(page) {
+  console.log("Attempting to login to Tokopedia...");
+
+  try {
+    // Navigate to Tokopedia seller login
+    // Adjust URL based on actual seller login page
+    await page.goto("https://www.tokopedia.com/login", { waitUntil: NAV_WAIT_UNTIL, timeout: VISIT_TIMEOUT_MS });
+    await sleep(3000);
+
+    // Wait for email/phone input field
+    // These selectors may need adjustment based on Tokopedia's actual HTML
+    const emailSelector = 'input[type="text"], input[type="email"], input[name="email"], input[placeholder*="email"], input[placeholder*="Email"]';
+    await page.waitForSelector(emailSelector, { timeout: 10000 });
+
+    // Fill in email/phone
+    await page.type(emailSelector, TOKOPEDIA_EMAIL, { delay: 100 });
+    await sleep(1000);
+
+    // Click next/continue button or find password field
+    const passwordSelector = 'input[type="password"], input[name="password"]';
+
+    // Some sites show password field after clicking next
+    const nextButton = await page.$('button[type="submit"], button:has-text("Selanjutnya"), button:has-text("Next")');
+    if (nextButton) {
+      await nextButton.click();
+      await sleep(2000);
+    }
+
+    // Wait for password field and fill it
+    await page.waitForSelector(passwordSelector, { timeout: 10000 });
+    await page.type(passwordSelector, TOKOPEDIA_PASSWORD, { delay: 100 });
+    await sleep(1000);
+
+    // Submit login form
+    const loginButton = 'button[type="submit"], button:has-text("Masuk"), button:has-text("Login")';
+    await page.click(loginButton);
+
+    // Wait for navigation after login
+    await sleep(5000);
+
+    // Check if OTP is required
+    const currentUrl = page.url();
+    if (currentUrl.includes('otp') || currentUrl.includes('verification')) {
+      console.log("⚠️  OTP/2FA detected. Please enter OTP manually within 60 seconds...");
+      console.log("Current URL:", currentUrl);
+
+      // Wait 60 seconds for manual OTP entry (only works in headful mode)
+      // For headless in GitHub Actions, you may need to handle this differently
+      await sleep(60000);
+    }
+
+    // Verify login success
+    await sleep(3000);
+    const finalUrl = page.url();
+
+    if (finalUrl.includes('login')) {
+      throw new Error("Login failed - still on login page");
+    }
+
+    console.log("✓ Login successful!");
+    return true;
+
+  } catch (error) {
+    console.error("Login failed:", error.message);
+    throw new Error(`Login failed: ${error.message}`);
+  }
+}
+
 async function run() {
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
@@ -115,6 +188,22 @@ async function run() {
   });
 
   const page = await newPage(browser);
+
+  // Login if credentials are provided
+  if (REQUIRE_LOGIN) {
+    try {
+      await loginToTokopedia(page);
+      console.log("Logged in successfully. Will now visit seller URLs...\n");
+    } catch (loginError) {
+      console.error("Failed to login:", loginError.message);
+      const errorSummary = `Login failed: ${loginError.message}\nCannot visit authenticated URLs without login.`;
+      fs.writeFileSync(SUMMARY_TXT, errorSummary, "utf8");
+      await browser.close();
+      return;
+    }
+  } else {
+    console.log("No login credentials provided. Visiting public URLs only.\n");
+  }
 
   const results = [];
   for (const url of urls) {

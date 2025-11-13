@@ -25,6 +25,9 @@ jobs:
 
       # 4. Run Puppeteer script to visit URLs
       - name: Run Puppeteer check (creates artifacts/summary.txt)
+        env:
+          TOKOPEDIA_EMAIL: ${{ secrets.TOKOPEDIA_EMAIL }}
+          TOKOPEDIA_PASSWORD: ${{ secrets.TOKOPEDIA_PASSWORD }}
         run: npm run ping
 
       # 5. Read summary file and load into GitHub Actions environment
